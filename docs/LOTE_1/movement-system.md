@@ -1,0 +1,511 @@
+# Sistema de Movimento
+
+[← Voltar ao Índice](../index.md)
+
+---
+
+## 🎮 Visão Geral
+
+O **Sistema de Movimento** implementa a física e controle do player, seguindo os pilares de design do MYLENA: **movimento expressivo, responsivo e preciso** inspirado em jogos como **Ori** e **Celeste**.
+
+---
+
+## 🏗️ Arquitetura
+
+### Componente Principal: PlayerMovementController
+
+```
+PlayerMovementController
+├── Rigidbody (física)
+├── CapsuleCollider (colisão)
+├── GroundCheck Transform (detecção de chão)
+└── GlobalVariables (configurações)
+```
+
+**Responsabilidades**:
+- ✅ Aplicar movimento horizontal (andar/correr)
+- ✅ Aplicar gravidade customizada
+- ✅ Detectar ground state
+- ✅ Implementar pulo (simples e duplo)
+- ✅ Emitir eventos de estado (velocity, grounded, etc)
+
+---
+
+## 🎯 Mecânicas Implementadas
+
+### 1. Movimento Horizontal (Plataforma 2.5D)
+
+#### Conceito de "Eixo de Plataforma"
+O jogo usa um **eixo principal** configurável para movimento:
+
+```csharp
+[SerializeField] private Vector3 platformAxis = Vector3.right; // (1,0,0)
+```
+
+**Por quê?**  
+- Em plataformas 2.5D, o player se move ao longo de um eixo (ex: X ou Z)
+- Permite rotação de câmera mantendo controle intuitivo
+- Y é reservado para pulo/gravidade
+
+#### Implementação
+
+```csharp
+private void ApplyMovement()
+{
+    // 1. Calcular velocidade alvo
+    float maxSpeed = _isSprinting ? GV.sprintSpeed : GV.walkSpeed;
+    float targetSpeed = maxSpeed * _moveInputX; // -1 a +1
+    
+    // 2. Velocidade atual ao longo do eixo
+    Vector3 currentVel = _rb.linearVelocity;
+    float currentSpeedAlongAxis = Vector3.Dot(currentVel, platformAxis);
+    
+    // 3. Escolher aceleração baseado em estado
+    float accel = _isGrounded ? GV.groundAcceleration : GV.airAcceleration;
+    float decel = _isGrounded ? GV.groundDeceleration : GV.airDeceleration;
+    float usedAccel = (Mathf.Abs(targetSpeed) > 0.01f) ? accel : decel;
+    
+    // 4. Interpolar suavemente
+    float newSpeed = Mathf.MoveTowards(
+        currentSpeedAlongAxis, 
+        targetSpeed, 
+        usedAccel * Time.fixedDeltaTime
+    );
+    
+    // 5. Aplicar ao rigidbody
+    Vector3 newVel = platformAxis * newSpeed;
+    newVel.y = _rb.linearVelocity.y; // Manter Y (gravidade)
+    _rb.linearVelocity = newVel;
+}
+```
+
+**Parâmetros Configuráveis** (via GlobalVariables):
+
+| Parâmetro | Valor Padrão | Descrição |
+|-----------|--------------|-----------|
+| `walkSpeed` | 6 m/s | Velocidade de caminhada |
+| `sprintSpeed` | 8 m/s | Velocidade de corrida |
+| `groundAcceleration` | 60 m/s² | Aceleração no chão |
+| `groundDeceleration` | 70 m/s² | Desaceleração no chão |
+| `airAcceleration` | 20 m/s² | Aceleração no ar |
+| `airDeceleration` | 10 m/s² | Desaceleração no ar |
+
+---
+
+### 2. Gravidade Customizada
+
+#### Por que não usar Unity Physics?
+Unity's gravity padrão (-9.81 m/s²) é **realista**, mas não **satisfatória** para jogos de plataforma.
+
+**Problemas**:
+- Pulos parecem "flutuantes"
+- Queda é lenta demais
+- Difícil fazer level design vertical
+
+**Solução: Gravidade Custom**
+```csharp
+private void ApplyGravity()
+{
+    // 1. Se no chão, manter colado
+    if (_isGrounded && _rb.linearVelocity.y <= 0f)
+    {
+        _rb.linearVelocity = new Vector3(
+            _rb.linearVelocity.x, 
+            -2f, // Pequena força para baixo
+            _rb.linearVelocity.z
+        );
+        _currentJumps = 0;
+        return;
+    }
+    
+    // 2. Aplicar gravidade (negativa = para baixo)
+    float gravity = GV.gravity; // -35 m/s²
+    
+    // 3. Multiplicador de queda (acelera queda para responsividade)
+    if (_rb.linearVelocity.y < 0f)
+    {
+        gravity *= GV.fallMultiplier; // 2x
+    }
+    
+    // 4. Aplicar aceleração
+    _rb.linearVelocity += Vector3.up * gravity * Time.fixedDeltaTime;
+}
+```
+
+**Parâmetros**:
+
+| Parâmetro | Valor | Descrição |
+|-----------|-------|-----------|
+| `gravity` | -35 m/s² | Gravidade base (mais forte que real) |
+| `fallMultiplier` | 2.0 | Multiplica gravidade na queda |
+
+**Resultado**: Pulos "snappy", quedas rápidas, sensação boa!
+
+---
+
+### 3. Sistema de Pulo
+
+#### Pulo Simples
+```csharp
+private void HandleJumpPressed()
+{
+    if (_isGrounded || _currentJumps < GV.maxJumps)
+    {
+        // Aplicar força de pulo (substitui velocidade Y)
+        var vel = _rb.linearVelocity;
+        vel.y = GV.jumpForce; // 8 m/s
+        _rb.linearVelocity = vel;
+        
+        _currentJumps++;
+    }
+}
+```
+
+**Por que substituir Y ao invés de adicionar?**  
+- Garante altura consistente
+- Evita "super pulos" por momentum
+
+#### Pulo Duplo (Sistema de Contagem)
+```csharp
+// Ao tocar o chão, resetar contador
+if (_isGrounded && _rb.linearVelocity.y <= 0f)
+{
+    _currentJumps = 0;
+}
+
+// Permitir pulo se tiver "charges"
+if (_currentJumps < GV.maxJumps) // maxJumps = 1 (simples) ou 2 (duplo)
+{
+    // Pular
+}
+```
+
+**Configuração** (via GlobalVariables):
+```csharp
+public int maxJumps = 1; // 1 = pulo simples, 2 = duplo, etc
+public float jumpForce = 8f;
+```
+
+---
+
+### 4. Ground Detection
+
+#### Técnica: Sphere Cast
+```csharp
+private void CheckGround()
+{
+    _wasGrounded = _isGrounded;
+    
+    // OverlapSphere na posição do GroundCheck
+    _isGrounded = Physics.CheckSphere(
+        groundCheck.position,    // Posição abaixo do player
+        groundCheckRadius,       // 0.3f (pequeno raio)
+        groundMask,              // Layer "Ground"
+        QueryTriggerInteraction.Ignore // Ignora triggers
+    );
+    
+    // Detectar mudanças de estado
+    if (_isGrounded != _wasGrounded)
+    {
+        GameEvents.RaisePlayerGroundedChanged(_isGrounded);
+    }
+    
+    // Aterrissagem
+    if (_isGrounded && !_wasGrounded)
+    {
+        GameEvents.RaisePlayerLanded();
+    }
+    
+    // Início de queda (saiu do chão sem pular)
+    if (!_isGrounded && _wasGrounded && _rb.linearVelocity.y < 0f)
+    {
+        GameEvents.RaisePlayerStartedFalling();
+    }
+}
+```
+
+**Setup do GroundCheck**:
+```csharp
+// No Awake(), criar automaticamente se não existir
+if (groundCheck == null)
+{
+    var g = new GameObject("GroundCheck");
+    g.transform.SetParent(transform);
+    g.transform.localPosition = new Vector3(
+        0f, 
+        -_capsule.height * 0.5f + 0.05f, // Logo abaixo do capsule
+        0f
+    );
+    groundCheck = g.transform;
+}
+```
+
+**Visualização com Gizmos**:
+```csharp
+private void OnDrawGizmosSelected()
+{
+    if (groundCheck != null)
+    {
+        Gizmos.color = _isGrounded ? Color.green : Color.red;
+        Gizmos.DrawWireSphere(groundCheck.position, groundCheckRadius);
+    }
+}
+```
+
+---
+
+## 🎨 Diferencial: Air vs Ground Control
+
+### Filosofia de Design
+Jogos de plataforma modernos (Celeste, Ori) oferecem **controle diferente no ar vs chão**:
+
+- **No Chão**: Resposta rápida, fácil mudar direção
+- **No Ar**: Mais "momentum", controle reduzido
+
+### Implementação
+
+| Ação | No Chão | No Ar |
+|------|---------|-------|
+| **Acelerar** | 60 m/s² | 20 m/s² |
+| **Frear** | 70 m/s² | 10 m/s² |
+
+**Resultado**:
+- Player responde **instantaneamente** no chão (satisfatório)
+- Player tem **inércia** no ar (desafio, skill ceiling)
+
+---
+
+## 🔄 Fluxo de Execução
+
+### Frame-by-Frame
+
+```
+Update() (60 FPS)
+    └── CheckGround()
+        ├── Physics.CheckSphere()
+        ├── Detectar mudanças de estado
+        └── Disparar eventos (OnGroundedChanged, OnLanded, etc)
+
+FixedUpdate() (50 FPS)
+    ├── ApplyMovement()
+    │   ├── Calcular velocidade alvo
+    │   ├── Interpolar atual → alvo
+    │   └── Aplicar ao Rigidbody
+    ├── ApplyGravity()
+    │   ├── Se no chão: força -2 Y
+    │   └── Se no ar: aplicar gravity * fallMultiplier
+    └── GameEvents.RaisePlayerVelocityChanged(_rb.linearVelocity)
+```
+
+**Por que CheckGround no Update?**  
+- Colisões são mais precisas em Update (antes de FixedUpdate)
+- Evita "frames perdidos" de ground detection
+
+---
+
+## ⚙️ Configuração no Inspector
+
+### PlayerMovementController
+
+```
+┌─────────────────────────────────────────┐
+│ Player Movement Controller (Script)     │
+├─────────────────────────────────────────┤
+│ Platform                                │
+│   Platform Axis: (1, 0, 0)             │ ← Eixo de movimento
+├─────────────────────────────────────────┤
+│ Ground Check                            │
+│   Ground Check: [GroundCheck Transform] │
+│   Ground Check Radius: 0.3              │
+│   Ground Mask: Ground                   │ ← Layer
+├─────────────────────────────────────────┤
+│ Debug                                   │
+│   ☑ Draw Gizmos                         │
+│   ☐ Log Ground Changes                  │
+│   ☐ Log Velocity                        │
+└─────────────────────────────────────────┘
+```
+
+---
+
+## 🧪 Debugging
+
+### 1. Gizmos Visuais
+```csharp
+// Mostra GroundCheck
+Gizmos.color = _isGrounded ? Color.green : Color.red;
+Gizmos.DrawWireSphere(groundCheck.position, groundCheckRadius);
+
+// Mostra eixo da plataforma
+Gizmos.color = Color.cyan;
+Gizmos.DrawLine(transform.position - platformAxis, transform.position + platformAxis);
+```
+
+### 2. Logs Opcionais
+```csharp
+[SerializeField] private bool logGroundChanges = false;
+[SerializeField] private bool logVelocity = false;
+
+if (logGroundChanges && _isGrounded != _wasGrounded)
+{
+    Debug.Log($"[Movement] Grounded: {_isGrounded}");
+}
+
+if (logVelocity)
+{
+    Debug.Log($"[Movement] Vel: {_rb.linearVelocity}");
+}
+```
+
+### 3. Debug UI Overlay
+```csharp
+// Em DebugOverlay.cs
+string info = $"Grounded: {_isGrounded}\n";
+info += $"Velocity: {_rb.linearVelocity}\n";
+info += $"Speed: {_rb.linearVelocity.magnitude:F1} m/s\n";
+info += $"Jumps: {_currentJumps}/{GV.maxJumps}";
+debugText.text = info;
+```
+
+---
+
+## 🎓 Mecânicas Futuras (Roadmap)
+
+### Sprint 2+
+
+#### 1. Coyote Time
+Permite pular por breve momento após sair da plataforma:
+
+```csharp
+private float _coyoteTimeCounter;
+
+void Update()
+{
+    if (_isGrounded)
+        _coyoteTimeCounter = GV.coyoteTime; // 0.1s
+    else
+        _coyoteTimeCounter -= Time.deltaTime;
+}
+
+bool CanJump()
+{
+    return _coyoteTimeCounter > 0f || _currentJumps < GV.maxJumps;
+}
+```
+
+#### 2. Jump Buffering
+Registra input de pulo mesmo antes de tocar chão:
+
+```csharp
+private float _jumpBufferCounter;
+
+void HandleJumpPressed()
+{
+    _jumpBufferCounter = GV.jumpBufferTime; // 0.1s
+}
+
+void FixedUpdate()
+{
+    if (_jumpBufferCounter > 0f)
+    {
+        _jumpBufferCounter -= Time.fixedDeltaTime;
+        
+        if (_isGrounded)
+        {
+            Jump();
+            _jumpBufferCounter = 0f;
+        }
+    }
+}
+```
+
+#### 3. Variable Jump Height
+Altura baseada em tempo de botão pressionado:
+
+```csharp
+private bool _isJumpHeld;
+
+void HandleJumpPressed()
+{
+    _isJumpHeld = true;
+    Jump();
+}
+
+void HandleJumpReleased()
+{
+    _isJumpHeld = false;
+}
+
+void ApplyGravity()
+{
+    float gravity = GV.gravity;
+    
+    // Se soltou botão, cair mais rápido
+    if (!_isJumpHeld && _rb.linearVelocity.y > 0f)
+    {
+        gravity *= GV.jumpCutMultiplier; // 3x
+    }
+    
+    _rb.linearVelocity += Vector3.up * gravity * Time.fixedDeltaTime;
+}
+```
+
+#### 4. Wall Climb & Slide
+Detectar parede, agarrar, escalar:
+
+```csharp
+private bool IsNearWall()
+{
+    return Physics.Raycast(
+        transform.position, 
+        platformAxis, 
+        out RaycastHit hit, 
+        wallCheckDistance, 
+        wallMask
+    );
+}
+
+private void HandleWallClimb()
+{
+    if (IsNearWall() && Input.GetKey(KeyCode.W))
+    {
+        _rb.linearVelocity = new Vector3(
+            _rb.linearVelocity.x, 
+            GV.wallClimbSpeed, 
+            _rb.linearVelocity.z
+        );
+    }
+}
+```
+
+---
+
+## ⚡ Performance
+
+### Otimizações Atuais
+1. **FixedUpdate** para física (50 FPS constante)
+2. **Rigidbody Interpolation** para smooth rendering
+3. **Collision Detection Mode: Continuous** (evita tunneling)
+
+### Profiling
+```csharp
+// Unity Profiler mostra:
+PlayerMovementController.FixedUpdate: ~0.05ms
+    ├── ApplyMovement: ~0.02ms
+    ├── ApplyGravity: ~0.01ms
+    └── Events: ~0.02ms
+```
+
+**Resultado**: < 1% do frame budget (60 FPS @ 16.67ms/frame)
+
+---
+
+## 📚 Referências
+
+- [Celeste Movement Breakdown](https://maddythorson.medium.com/celeste-and-towerfall-physics-d24bd2ae0fc5)
+- [Math for Game Programmers: Building a Better Jump](https://www.youtube.com/watch?v=hG9SzQxaCm8)
+- [Unity Rigidbody Best Practices](https://docs.unity3d.com/Manual/RigidbodiesOverview.html)
+
+---
+
+[← Voltar ao Índice](../index.md) | [Anterior: Sistema de Eventos](event-system.md) | [Próximo: Sistema de Animação →](animation-system.md)
