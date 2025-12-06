@@ -12,40 +12,14 @@
 ## 📚 Navegação Rápida
 
 ### 🎯 Visão Geral
-- [Sobre o Projeto](pages/overview.md)
-- [Arquitetura Geral](pages/architecture.md)
-- [Estrutura de Pastas](pages/folder-structure.md)
-- [Fluxo de Dados](pages/data-flow.md)
+- [Arquitetura Geral](/pages/architecture.md)
 
 ### 🎮 Sistemas Core
-- [Sistema de Input](pages/input-system.md)
-- [Sistema de Eventos](pages/event-system.md)
-- [Sistema de Movimento](pages/movement-system.md)
-- [Sistema de Câmera](pages/camera-system.md)
-- [Sistema de Animação](pages/animation-system.md)
-
-### 🔧 Componentes
-- [PlayerController](pages/components/player-controller.md)
-- [PlayerInputController](pages/components/player-input-controller.md)
-- [PlayerMovementController](pages/components/player-movement-controller.md)
-- [PlayerAnimationController](pages/components/player-animation-controller.md)
-- [GlobalVariables](pages/components/global-variables.md)
-
-### 📖 Guias
-- [Guia de Instalação](pages/guides/installation.md)
-- [Guia de Contribuição](pages/guides/contributing.md)
-- [Padrões de Código](pages/guides/coding-standards.md)
-- [Debugging e Testes](pages/guides/debugging.md)
-
-### 🚀 Sprint Atual
-- [Sprint 1 - Overview](pages/sprints/sprint1-overview.md)
-- [Sprint 1 - Phase 1](pages/sprints/sprint1-phase1.md)
-- [Roadmap](pages/sprints/roadmap.md)
-
-### 📝 Referências
-- [Glossário](pages/glossary.md)
-- [FAQ](pages/faq.md)
-- [Changelog](pages/changelog.md)
+- [Sistema de Input](/pages/input-system.md)
+- [Sistema de Eventos](/pages/event-system.md)
+- [Sistema de Movimento](/pages/movement-system.md)
+- [Sistema de Câmera](/pages/camera-system.md)
+- [Sistema de Animação](/pages/animation-system.md)
 
 ---
 
@@ -128,7 +102,7 @@
 
 ```bash
 # 1. Clone o repositório
-git clone https://github.com/seu-usuario/mylena.git
+git clone https://github.com/Luciano-Claudio/Mylena3D
 
 # 2. Abra no Unity Hub
 # Unity 2022.3 LTS ou superior
@@ -182,7 +156,7 @@ Este projeto é de propriedade privada e ainda não possui licença pública def
 - [GitHub Repository](#)
 - [Trello Board](#)
 - [Art References](#)
-- [Game Design Document](https://github.com/seu-usuario/mylena/blob/main/GDD.md)
+- [Game Design Document](https://luciano-claudio.github.io/Mylena3D/)
 
 ---
 
