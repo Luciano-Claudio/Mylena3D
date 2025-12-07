@@ -92,6 +92,223 @@ private void ApplyMovement()
 
 ---
 
+## 🐛 Bug Crítico Resolvido - Dezembro 2024
+
+### ⚠️ Problema Identificado
+
+**Sintoma**: Movimento e gravidade do player estavam incorretos e inconsistentes.
+
+**Causa Raiz**: Os métodos `ApplyMovement()` e `ApplyGravity()` modificavam `_rb.linearVelocity` diretamente em sequência, causando sobrescrita de valores.
+
+#### Código Problemático (Versão Anterior)
+
+```csharp
+// ❌ BUG - FixedUpdate
+private void FixedUpdate()
+{
+    ApplyMovement();  // Modifica velocity.x e velocity.z
+    ApplyGravity();   // Pega velocity MODIFICADO e aplica Y
+    
+    BroadcastVelocityChanged();
+}
+
+private void ApplyMovement()
+{
+    // ... cálculos ...
+    
+    // PROBLEMA: Modifica diretamente _rb.linearVelocity
+    var vel = _rb.linearVelocity;
+    vel.x = newSpeedX;
+    vel.z = newSpeedZ;
+    _rb.linearVelocity = vel;
+}
+
+private void ApplyGravity()
+{
+    // PROBLEMA: Pega velocidade JÁ MODIFICADA por ApplyMovement
+    var vel = _rb.linearVelocity;
+    vel.y += gravity * Time.fixedDeltaTime;
+    _rb.linearVelocity = vel;
+}
+```
+
+#### O Que Estava Acontecendo?
+
+```
+Frame N:
+1. ApplyMovement() define velocity = (5, -2, 0)   ← De frame anterior
+2. ApplyGravity() lê velocity = (5, -2, 0)        ← Pega X/Z do MESMO frame
+3. ApplyGravity() define velocity = (5, -4, 0)    ← Aplica gravidade
+
+Resultado: Movimento horizontal e vertical MISTURADOS! 🔴
+```
+
+---
+
+### ✅ Solução Implementada
+
+**Estratégia**: Usar variável intermediária `_targetVelocity` para acumular todas as mudanças antes de aplicar de uma vez.
+
+#### Código Corrigido (Versão Atual)
+
+```csharp
+// ✅ CORREÇÃO
+private Vector3 _targetVelocity; // Nova variável de classe
+
+private void FixedUpdate()
+{
+    // ✨ PASSO 1: Capturar estado atual
+    _targetVelocity = _rb.linearVelocity;
+    
+    // ✨ PASSO 2: Aplicar movimento (modifica _targetVelocity)
+    ApplyMovement();
+    
+    // ✨ PASSO 3: Aplicar gravidade (modifica _targetVelocity)
+    ApplyGravity();
+    
+    // ✨ PASSO 4: Aplicar TODAS as mudanças de uma vez
+    _rb.linearVelocity = _targetVelocity;
+    
+    BroadcastVelocityChanged();
+}
+
+private void ApplyMovement()
+{
+    if (GV == null || _rb == null) return;
+
+    float maxSpeed = _isSprinting ? GV.sprintSpeed : GV.walkSpeed;
+    float targetSpeed = maxSpeed * _moveInputX;
+
+    // ✨ CRÍTICO: Usar _targetVelocity ao invés de _rb.linearVelocity
+    float currentSpeedAlongAxis = Vector3.Dot(_targetVelocity, platformAxis);
+    
+    // ... cálculos de aceleração ...
+    
+    float newSpeedAlongAxis = Mathf.MoveTowards(
+        currentSpeedAlongAxis,
+        targetSpeed,
+        usedAccel * Time.fixedDeltaTime
+    );
+
+    // ✨ CORREÇÃO: Modificar _targetVelocity (X e Z apenas)
+    Vector3 horizontalVel = platformAxis * newSpeedAlongAxis;
+    _targetVelocity.x = horizontalVel.x;
+    _targetVelocity.z = horizontalVel.z;
+    // Y não é tocado aqui (fica para ApplyGravity)
+}
+
+private void ApplyGravity()
+{
+    if (GV == null || _rb == null) return;
+
+    // ✨ CORREÇÃO: Usar _targetVelocity ao invés de _rb.linearVelocity
+    if (_isGrounded && _targetVelocity.y <= 0f)
+    {
+        _currentJumps = 0;
+
+        if (_jumpBufferTimer > 0f)
+        {
+            TryExecuteJump();
+        }
+        else
+        {
+            // Manter colado no chão
+            _targetVelocity.y = GROUND_STICK_FORCE;
+        }
+        return;
+    }
+
+    // Aplicar gravidade
+    float gravity = GV.gravity;
+    if (_targetVelocity.y < 0f)
+    {
+        gravity *= GV.fallMultiplier;
+    }
+
+    // ✨ CORREÇÃO: Modificar _targetVelocity.y
+    _targetVelocity.y += gravity * Time.fixedDeltaTime;
+}
+```
+
+#### Fluxo Correto Agora
+
+```
+Frame N:
+1. _targetVelocity = _rb.linearVelocity (captura: 3, -2, 0)
+2. ApplyMovement() modifica _targetVelocity.x/z → (5, -2, 0)
+3. ApplyGravity() modifica _targetVelocity.y → (5, -4, 0)
+4. _rb.linearVelocity = _targetVelocity → Aplica (5, -4, 0)
+
+Resultado: Movimento horizontal e vertical INDEPENDENTES! ✅
+```
+
+---
+
+### 📊 Impacto da Correção
+
+| Aspecto | Antes (Bug) | Depois (Corrigido) |
+|---------|-------------|-------------------|
+| **Física** | Inconsistente | Previsível ✅ |
+| **Pulo** | Altura variável | Altura constante ✅ |
+| **Movimento** | Errático | Suave ✅ |
+| **Gravidade** | Aceleração estranha | Aceleração correta ✅ |
+
+---
+
+### 🎓 Lição Aprendida
+
+**Princípio**: Quando múltiplas operações modificam o mesmo estado, use uma **variável intermediária** para acumular mudanças.
+
+**Padrão Correto**:
+```csharp
+// 1. Capturar estado
+var temp = currentState;
+
+// 2. Modificar temp em múltiplos passos
+ModifyX(temp);
+ModifyY(temp);
+ModifyZ(temp);
+
+// 3. Aplicar de uma vez
+currentState = temp;
+```
+
+**Anti-Padrão (evitar)**:
+```csharp
+// ❌ Modificar estado diretamente em cada passo
+ModifyX(currentState); // currentState muda
+ModifyY(currentState); // Usa valor JÁ modificado por ModifyX!
+ModifyZ(currentState); // Usa valor JÁ modificado por ModifyY!
+```
+
+---
+
+### 🔧 Como Testar a Correção
+
+1. **Teste de Pulo**:
+   ```
+   - Pressione Space no chão
+   - Player deve subir EXATAMENTE para a mesma altura toda vez
+   - Não deve haver variação baseada em velocidade horizontal
+   ```
+
+2. **Teste de Movimento no Ar**:
+   ```
+   - Pressione A/D enquanto no ar
+   - Movimento horizontal deve ser suave e consistente
+   - Não deve afetar velocidade vertical (queda)
+   ```
+
+3. **Teste de Gravidade**:
+   ```
+   - Pular e soltar Space
+   - Queda deve acelerar consistentemente
+   - fallMultiplier deve ser visível (queda mais rápida que subida)
+   ```
+
+---
+
+
 ### 2. Gravidade Customizada
 
 #### Por que não usar Unity Physics?

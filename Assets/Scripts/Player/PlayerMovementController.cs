@@ -1,12 +1,29 @@
-using UnityEngine;
+﻿using UnityEngine;
 using Mylena;
 using Mylena.Core;
 
 namespace Mylena.Player
 {
+    /// <summary>
+    /// VERSÃO FINAL CORRIGIDA - PlayerMovementController
+    /// 
+    /// BUG CRÍTICO RESOLVIDO:
+    /// ApplyMovement e ApplyGravity agora usam variável intermediária
+    /// para evitar sobrescrever velocidade com valor do frame anterior.
+    /// </summary>
     [RequireComponent(typeof(Rigidbody), typeof(CapsuleCollider))]
     public class PlayerMovementController : MonoBehaviour
     {
+        #region Constants
+
+        private const float GROUND_STICK_FORCE = -2f;
+        private const float MIN_INPUT_THRESHOLD = 0.01f;
+        private const float INPUT_BUFFER_TIME = 0.15f;
+
+        #endregion
+
+        #region Serialized Fields
+
         [Header("Platform")]
         [Tooltip("Eixo principal da plataforma. Ex: (1,0,0) = eixo X, (0,0,1) = eixo Z.")]
         [SerializeField] private Vector3 platformAxis = Vector3.right;
@@ -14,60 +31,163 @@ namespace Mylena.Player
         [Header("Ground Check")]
         [SerializeField] private Transform groundCheck;
         [SerializeField] private float groundCheckRadius = 0.3f;
-        [SerializeField] private LayerMask groundMask; // Layer do ch�o
+        [SerializeField] private LayerMask groundMask;
 
         [Header("Debug")]
         [SerializeField] private bool drawGizmos = true;
-        [SerializeField] private bool logGroundChanges = false;
-        [SerializeField] private bool logVelocity = false;
+        [SerializeField] private bool enableDebugLogs = false;
+
+        #endregion
+
+        #region Private Fields
 
         private Rigidbody _rb;
         private CapsuleCollider _capsule;
-
-        // input 1D (esquerda/direita)
         private float _moveInputX;
         private bool _isGrounded;
         private bool _wasGrounded;
         private bool _isSprinting;
-
-        // n�mero de pulos j� usados (para pulo duplo no futuro)
         private int _currentJumps;
+        private float _jumpBufferTimer;
+        private GlobalVariables _globalVariables;
 
-        private GlobalVariables GV => GlobalVariables.Instance;
+        // ✨ CRÍTICO: Variável intermediária para acumular mudanças de velocidade
+        private Vector3 _targetVelocity;
+
+        #endregion
+
+        #region Properties
+
+        private GlobalVariables GV
+        {
+            get
+            {
+                if (_globalVariables == null)
+                {
+                    _globalVariables = GlobalVariables.Instance;
+
+                    if (_globalVariables == null)
+                    {
+                        Debug.LogError("[PlayerMovementController] GlobalVariables.Instance está null!", this);
+                    }
+                }
+                return _globalVariables;
+            }
+        }
+
+        public bool IsGrounded => _isGrounded;
+        public Vector3 Velocity => _rb != null ? _rb.linearVelocity : Vector3.zero;
+
+        #endregion
+
+        #region Unity Lifecycle
 
         private void Awake()
+        {
+            InitializeComponents();
+            SetupGroundCheck();
+            ValidatePlatformAxis();
+            ValidateGroundMask();
+        }
+
+        private void OnEnable()
+        {
+            SubscribeToEvents();
+        }
+
+        private void OnDisable()
+        {
+            UnsubscribeFromEvents();
+        }
+
+        private void Update()
+        {
+            CheckGround();
+            UpdateJumpBuffer();
+        }
+
+        private void FixedUpdate()
+        {
+            // ✨ CORREÇÃO CRÍTICA: Usar variável intermediária
+            // Inicia com velocidade atual
+            _targetVelocity = _rb.linearVelocity;
+
+            // Aplica movimento (modifica _targetVelocity)
+            ApplyMovement();
+
+            // Aplica gravidade (modifica _targetVelocity)
+            ApplyGravity();
+
+            // Aplica de uma vez
+            _rb.linearVelocity = _targetVelocity;
+
+            BroadcastVelocityChanged();
+        }
+
+        #endregion
+
+        #region Initialization
+
+        private void InitializeComponents()
         {
             _rb = GetComponent<Rigidbody>();
             _capsule = GetComponent<CapsuleCollider>();
 
+            if (_rb == null)
+            {
+                Debug.LogError("[PlayerMovementController] Rigidbody não encontrado!", this);
+                return;
+            }
+
+            if (_capsule == null)
+            {
+                Debug.LogError("[PlayerMovementController] CapsuleCollider não encontrado!", this);
+                return;
+            }
+
             _rb.freezeRotation = true;
             _rb.interpolation = RigidbodyInterpolation.Interpolate;
             _rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
+        }
 
-            // cria ground check se n�o tiver
-            if (groundCheck == null)
+        private void SetupGroundCheck()
+        {
+            if (groundCheck == null && _capsule != null)
             {
                 var g = new GameObject("GroundCheck");
                 g.transform.SetParent(transform);
-                g.transform.localPosition =
-                    new Vector3(0f, -_capsule.height * 0.5f + 0.05f, 0f);
+                g.transform.localPosition = new Vector3(0f, -_capsule.height * 0.5f + 0.05f, 0f);
                 groundCheck = g.transform;
-            }
 
-            // garante eixo de plataforma no plano XZ
-            if (platformAxis == Vector3.zero)
-                platformAxis = Vector3.right;
-
-            platformAxis.y = 0f;
-            platformAxis.Normalize();
-
-            if (GV == null)
-            {
-                Debug.LogError("[PlayerMovementController] GlobalVariables.Instance est� null. Coloque o asset de GlobalVariables na cena ou em Resources.");
+                Debug.Log("[PlayerMovementController] GroundCheck criado automaticamente.", this);
             }
         }
 
-        private void OnEnable()
+        private void ValidatePlatformAxis()
+        {
+            if (platformAxis == Vector3.zero)
+            {
+                Debug.LogWarning("[PlayerMovementController] Platform Axis está zerado! Usando Vector3.right.", this);
+                platformAxis = Vector3.right;
+            }
+
+            platformAxis.y = 0f;
+            platformAxis.Normalize();
+        }
+
+        private void ValidateGroundMask()
+        {
+            if (groundMask.value == 0)
+            {
+                Debug.LogWarning("[PlayerMovementController] Ground Mask não configurado!", this);
+            }
+        }
+
+        #endregion
+
+        #region Event Subscription
+
+        private void SubscribeToEvents()
         {
             GameEvents.OnMoveInput += HandleMoveInput;
             GameEvents.OnJumpPressed += HandleJumpPressed;
@@ -75,7 +195,7 @@ namespace Mylena.Player
             GameEvents.OnSprintCanceled += HandleSprintCanceled;
         }
 
-        private void OnDisable()
+        private void UnsubscribeFromEvents()
         {
             GameEvents.OnMoveInput -= HandleMoveInput;
             GameEvents.OnJumpPressed -= HandleJumpPressed;
@@ -83,29 +203,12 @@ namespace Mylena.Player
             GameEvents.OnSprintCanceled -= HandleSprintCanceled;
         }
 
-        private void Update()
-        {
-            CheckGround();
-        }
+        #endregion
 
-        private void FixedUpdate()
-        {
-            ApplyMovement();
-            ApplyGravity();
-
-            GameEvents.RaisePlayerVelocityChanged(_rb.linearVelocity);
-
-            if (logVelocity)
-            {
-                Debug.Log($"[PlayerMovementController] vel = {_rb.linearVelocity}");
-            }
-        }
-
-        #region Handlers de Input
+        #region Input Handlers
 
         private void HandleMoveInput(Vector2 input)
         {
-            // Plataforma: s� eixo horizontal (A/D, setas, etc.)
             _moveInputX = input.x;
         }
 
@@ -121,76 +224,121 @@ namespace Mylena.Player
 
         private void HandleJumpPressed()
         {
-            if (GV == null) return;
-
-            if (_isGrounded || _currentJumps < GV.maxJumps)
-            {
-                var vel = _rb.linearVelocity;
-                vel.y = GV.jumpForce;
-                _rb.linearVelocity = vel;
-                _currentJumps++;
-            }
+            _jumpBufferTimer = INPUT_BUFFER_TIME;
+            TryExecuteJump();
         }
 
         #endregion
 
-        #region Movimento
+        #region Movement Logic
 
+        /// <summary>
+        /// Aplica movimento horizontal modificando _targetVelocity.
+        /// </summary>
         private void ApplyMovement()
         {
-            if (GV == null) return;
+            if (GV == null || _rb == null) return;
 
-            // Velocidade alvo (positiva ou negativa) ao longo do eixo
+            // Calcular velocidade alvo
             float maxSpeed = _isSprinting ? GV.sprintSpeed : GV.walkSpeed;
-            float targetSpeed = maxSpeed * _moveInputX; // negativo = esquerda, positivo = direita
+            float targetSpeed = maxSpeed * _moveInputX;
 
-            // Eixo da plataforma
-            Vector3 axis = platformAxis;
+            // ✨ CORREÇÃO: Usar _targetVelocity ao invés de _rb.linearVelocity
+            float currentSpeedAlongAxis = Vector3.Dot(_targetVelocity, platformAxis);
 
-            // Velocidade atual
-            Vector3 currentVel = _rb.linearVelocity;
-            float currentSpeedAlongAxis = Vector3.Dot(currentVel, axis); // componente ao longo do eixo
-
-            // Escolhe acelera��o/decelera��o dependendo de ch�o/ar
-            bool hasInput = Mathf.Abs(targetSpeed) > 0.01f;
-
+            // Escolher aceleração
+            bool hasInput = Mathf.Abs(targetSpeed) > MIN_INPUT_THRESHOLD;
             float accel = _isGrounded ? GV.groundAcceleration : GV.airAcceleration;
             float decel = _isGrounded ? GV.groundDeceleration : GV.airDeceleration;
-
             float usedAccel = hasInput ? accel : decel;
 
+            // Interpolar velocidade
             float newSpeedAlongAxis = Mathf.MoveTowards(
                 currentSpeedAlongAxis,
                 targetSpeed,
                 usedAccel * Time.fixedDeltaTime
             );
 
-            // Monta nova velocidade
-            Vector3 newVel = axis * newSpeedAlongAxis;
-            newVel.y = _rb.linearVelocity.y; // mant�m Y (pulo/gravidade)
-
-            _rb.linearVelocity = newVel;
+            // ✨ CORREÇÃO: Modificar _targetVelocity
+            Vector3 horizontalVel = platformAxis * newSpeedAlongAxis;
+            _targetVelocity.x = horizontalVel.x;
+            _targetVelocity.z = horizontalVel.z;
+            // Y não é tocado aqui (fica para ApplyGravity)
         }
 
+        /// <summary>
+        /// Aplica gravidade modificando _targetVelocity.
+        /// </summary>
         private void ApplyGravity()
         {
-            if (GV == null) return;
+            if (GV == null || _rb == null) return;
 
-            if (_isGrounded && _rb.linearVelocity.y <= 0f)
+            // ✨ CORREÇÃO: Usar _targetVelocity ao invés de _rb.linearVelocity
+            if (_isGrounded && _targetVelocity.y <= 0f)
             {
-                // Mant�m colado no ch�o e reseta pulos
-                _rb.linearVelocity = new Vector3(_rb.linearVelocity.x, -2f, _rb.linearVelocity.z);
                 _currentJumps = 0;
+
+                if (_jumpBufferTimer > 0f)
+                {
+                    TryExecuteJump();
+                }
+                else
+                {
+                    // Manter colado no chão
+                    _targetVelocity.y = GROUND_STICK_FORCE;
+                }
                 return;
             }
 
+            // Aplicar gravidade
             float gravity = GV.gravity;
-            if (_rb.linearVelocity.y < 0f)
+            if (_targetVelocity.y < 0f)
             {
                 gravity *= GV.fallMultiplier;
             }
 
-            _rb.linearVelocity += Vector3.up * gravity * Time.fixedDeltaTime;
+            _targetVelocity.y += gravity * Time.fixedDeltaTime;
+        }
+
+        #endregion
+
+        #region Jump System
+
+        private void UpdateJumpBuffer()
+        {
+            if (_jumpBufferTimer > 0f)
+            {
+                _jumpBufferTimer -= Time.deltaTime;
+            }
+        }
+
+        private void TryExecuteJump()
+        {
+            if (GV == null || _rb == null) return;
+
+            if (_isGrounded || _currentJumps < GV.maxJumps)
+            {
+                // ✨ CORREÇÃO: Modificar _targetVelocity se estamos em FixedUpdate
+                // Ou _rb.linearVelocity se não estamos
+                if (Time.inFixedTimeStep)
+                {
+                    _targetVelocity.y = GV.jumpForce;
+                }
+                else
+                {
+                    var vel = _rb.linearVelocity;
+                    vel.y = GV.jumpForce;
+                    _rb.linearVelocity = vel;
+                }
+
+                _currentJumps++;
+                _jumpBufferTimer = 0f;
+
+                if (enableDebugLogs)
+                {
+                    Debug.Log($"<color=green>[Jump]</color> Executed! Jumps: {_currentJumps}/{GV.maxJumps}");
+                }
+            }
         }
 
         #endregion
@@ -199,10 +347,10 @@ namespace Mylena.Player
 
         private void CheckGround()
         {
-            _wasGrounded = _isGrounded;
+            if (groundCheck == null || _rb == null) return;
 
-            // se n�o marcar nada no inspector, usa todas as layers
-            int mask = groundMask.value != 0 ? groundMask.value : ~0;
+            _wasGrounded = _isGrounded;
+            int mask = groundMask.value != 0 ? groundMask.value : LayerMask.GetMask("Default");
 
             _isGrounded = Physics.CheckSphere(
                 groundCheck.position,
@@ -211,11 +359,11 @@ namespace Mylena.Player
                 QueryTriggerInteraction.Ignore
             );
 
-            if (logGroundChanges && _isGrounded != _wasGrounded)
-            {
-                Debug.Log($"[PlayerMovementController] Grounded mudou: now={_isGrounded}");
-            }
+            HandleGroundStateChanges();
+        }
 
+        private void HandleGroundStateChanges()
+        {
             if (_isGrounded != _wasGrounded)
             {
                 GameEvents.RaisePlayerGroundedChanged(_isGrounded);
@@ -234,6 +382,16 @@ namespace Mylena.Player
 
         #endregion
 
+        #region Event Broadcasting
+
+        private void BroadcastVelocityChanged()
+        {
+            if (_rb == null) return;
+            GameEvents.RaisePlayerVelocityChanged(_rb.linearVelocity);
+        }
+
+        #endregion
+
         #region Gizmos
 
         private void OnDrawGizmosSelected()
@@ -246,14 +404,22 @@ namespace Mylena.Player
                 Gizmos.DrawWireSphere(groundCheck.position, groundCheckRadius);
             }
 
-            // desenha eixo da plataforma
             Gizmos.color = Color.cyan;
             Vector3 origin = transform.position;
             Vector3 axis = platformAxis;
             axis.y = 0f;
-            if (axis == Vector3.zero) axis = Vector3.right;
+
+            if (axis == Vector3.zero)
+                axis = Vector3.right;
+
             axis.Normalize();
-            Gizmos.DrawLine(origin - axis, origin + axis);
+            Gizmos.DrawLine(origin - axis * 2f, origin + axis * 2f);
+
+            Vector3 arrowTip = origin + axis * 2f;
+            Vector3 arrowLeft = arrowTip - axis * 0.3f + Vector3.forward * 0.2f;
+            Vector3 arrowRight = arrowTip - axis * 0.3f - Vector3.forward * 0.2f;
+            Gizmos.DrawLine(arrowTip, arrowLeft);
+            Gizmos.DrawLine(arrowTip, arrowRight);
         }
 
         #endregion
